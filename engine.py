@@ -111,7 +111,7 @@ def get_portfolio_history(raw_portfolio: dict, period: str = "6mo") -> pd.DataFr
 
     value = pd.Series(0.0, index=data.index)
     for ticker in tickers:
-        value += data[ticker].ffill() * portfolio[ticker]["shares"]
+        value += data[ticker].fillna(method="ffill") * portfolio[ticker]["shares"]
 
     return value.rename("Portfolio Value").reset_index()
 
@@ -139,3 +139,109 @@ def get_news(ticker: str, limit: int = 5) -> list:
     except Exception:
         items = []
     return items[:limit]
+
+
+# =================================================================
+# PHASE 3 — Financial Metrics
+# =================================================================
+
+# ---------------------------------------------------------------
+# Metric 1: Daily Returns — pct_change() on each stock's close price
+# ---------------------------------------------------------------
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_daily_returns(tickers: list, period: str = "6mo") -> pd.DataFrame:
+    data = yf.download(tickers, period=period, auto_adjust=True, progress=False)["Close"]
+    if isinstance(data, pd.Series):
+        data = data.to_frame(tickers[0])
+    return data.pct_change().dropna()
+
+
+def get_portfolio_daily_returns(raw_portfolio: dict, period: str = "6mo") -> pd.Series:
+    """Weighted daily return of the whole portfolio, from reconstructed value history."""
+    history = get_portfolio_history(raw_portfolio, period)
+    value = history.set_index(history.columns[0])["Portfolio Value"]
+    return value.pct_change().dropna()
+
+
+# ---------------------------------------------------------------
+# Metric 2: Volatility — std dev of returns, annualized with sqrt(252)
+# ---------------------------------------------------------------
+def compute_volatility(returns: pd.Series, annualize: bool = True) -> float:
+    vol = returns.std()
+    if annualize:
+        vol *= 252 ** 0.5
+    return round(vol * 100, 2)  # as a %
+
+
+# ---------------------------------------------------------------
+# Metric 3: Correlation Matrix — how holdings move together
+# ---------------------------------------------------------------
+def compute_correlation_matrix(returns_df: pd.DataFrame) -> pd.DataFrame:
+    return returns_df.corr().round(2)
+
+
+# ---------------------------------------------------------------
+# Metric 4: Maximum Drawdown — biggest fall from a prior peak
+# ---------------------------------------------------------------
+def compute_max_drawdown(value_series: pd.Series) -> dict:
+    running_peak = value_series.cummax()
+    drawdown = (value_series - running_peak) / running_peak
+
+    trough_idx = drawdown.idxmin()
+    max_dd_pct = drawdown.loc[trough_idx] * 100
+    peak_idx = value_series.loc[:trough_idx].idxmax()
+
+    return {
+        "max_drawdown_pct": round(max_dd_pct, 2),
+        "peak_value": round(value_series.loc[peak_idx], 2),
+        "peak_date": peak_idx,
+        "trough_value": round(value_series.loc[trough_idx], 2),
+        "trough_date": trough_idx,
+    }
+
+
+# ---------------------------------------------------------------
+# Metric 5: Portfolio Risk Score — your own simple composite score
+#   Risk Score = Volatility Score x 40% + Drawdown Score x 30%
+#              + Concentration Score x 30%
+#   Low: 0-30   Medium: 31-60   High: 61-100
+# ---------------------------------------------------------------
+def compute_concentration(report: dict) -> float:
+    """Herfindahl-Hirschman Index on current value weights, scaled to 0-100.
+    All-in-one-stock -> 100. Evenly split across many stocks -> low."""
+    total = report["total_current_value"]
+    if not total:
+        return 0.0
+    weights = [h["current_value"] / total for h in report["holdings"].values()]
+    hhi = sum(w ** 2 for w in weights)
+    return round(hhi * 100, 2)
+
+
+def _clamp(x, low=0, high=100):
+    return max(low, min(high, x))
+
+
+def compute_risk_score(annual_volatility_pct: float, max_drawdown_pct: float, concentration: float) -> dict:
+    # Scale raw metrics to 0-100 "risk points" before weighting.
+    # 50% annualized volatility or 50% drawdown is treated as maximally risky (100).
+    vol_score = _clamp(abs(annual_volatility_pct) / 50 * 100)
+    drawdown_score = _clamp(abs(max_drawdown_pct) / 50 * 100)
+    concentration_score = _clamp(concentration)  # already 0-100 (HHI x 100)
+
+    score = vol_score * 0.40 + drawdown_score * 0.30 + concentration_score * 0.30
+    score = round(score, 1)
+
+    if score <= 30:
+        label = "Low Risk"
+    elif score <= 60:
+        label = "Medium Risk"
+    else:
+        label = "High Risk"
+
+    return {
+        "score": score,
+        "label": label,
+        "vol_score": round(vol_score, 1),
+        "drawdown_score": round(drawdown_score, 1),
+        "concentration_score": round(concentration_score, 1),
+    }
