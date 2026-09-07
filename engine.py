@@ -1,7 +1,10 @@
 """
-engine.py — shared data + calculation layer for the dashboard.
-Every page imports from here so there's exactly one source of truth
-for the portfolio, prices, and math (Phase 1 logic, reused).
+engine.py — pure calculation layer (Phase 1-3 logic, unchanged).
+Every function here takes a raw_portfolio dict shaped as:
+    {"TCS.NS": {"investment": 30000, "buy_price": 3000}, ...}
+Where that dict comes from now (DB, per logged-in user) is handled by
+context.py + repository.py, not here — this file doesn't know about
+users or auth at all.
 """
 
 import yfinance as yf
@@ -9,34 +12,8 @@ import pandas as pd
 import streamlit as st
 
 
-# ---------------------------------------------------------------
-# Your portfolio (edit this, or use the "Add holding" form on the
-# Portfolio page once the app is running).
-# ---------------------------------------------------------------
-DEFAULT_PORTFOLIO = {
-    "TCS.NS": {"investment": 30000, "buy_price": 3000},
-    "INFY.NS": {"investment": 25000, "buy_price": 1500},
-    "RELIANCE.NS": {"investment": 25000, "buy_price": 2500},
-    "HDFCBANK.NS": {"investment": 20000, "buy_price": 1600},
-}
-
-DISPLAY_NAMES = {
-    "TCS.NS": "TCS",
-    "INFY.NS": "INFY",
-    "RELIANCE.NS": "RELIANCE",
-    "HDFCBANK.NS": "HDFC BANK",
-}
-
-
-def get_portfolio() -> dict:
-    """Portfolio lives in session_state so the 'Add holding' form can edit it live."""
-    if "portfolio_raw" not in st.session_state:
-        st.session_state["portfolio_raw"] = dict(DEFAULT_PORTFOLIO)
-    return st.session_state["portfolio_raw"]
-
-
 def display_name(ticker: str) -> str:
-    return DISPLAY_NAMES.get(ticker, ticker.replace(".NS", ""))
+    return ticker.replace(".NS", "").replace(".BO", "")
 
 
 # ---------------------------------------------------------------
@@ -111,7 +88,7 @@ def get_portfolio_history(raw_portfolio: dict, period: str = "6mo") -> pd.DataFr
 
     value = pd.Series(0.0, index=data.index)
     for ticker in tickers:
-        value += data[ticker].fillna(method="ffill") * portfolio[ticker]["shares"]
+        value += data[ticker].ffill() * portfolio[ticker]["shares"]
 
     return value.rename("Portfolio Value").reset_index()
 

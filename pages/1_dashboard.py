@@ -1,11 +1,18 @@
 import streamlit as st
 import plotly.express as px
-from engine import get_portfolio, evaluate_portfolio, get_portfolio_history, display_name
+import auth
+import context
+from engine import evaluate_portfolio, get_portfolio_history, display_name
 
 st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide")
+user, cookies = auth.require_login()
+raw_portfolio, portfolio_id = context.ensure_active_portfolio(user, cookies)
+
 st.title("📊 Dashboard")
 
-raw_portfolio = get_portfolio()
+if not raw_portfolio:
+    st.info("This portfolio has no holdings yet. Add some on the **Portfolio** page.")
+    st.stop()
 
 with st.spinner("Fetching live prices..."):
     report = evaluate_portfolio(raw_portfolio)
@@ -30,7 +37,7 @@ with st.spinner("Building growth chart..."):
 
 fig = px.line(history, x=history.columns[0], y="Portfolio Value")
 fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=350)
-st.plotly_chart(fig, width='stretch')
+st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 

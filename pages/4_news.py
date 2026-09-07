@@ -1,12 +1,19 @@
 import streamlit as st
 from datetime import datetime
-from engine import get_portfolio, get_news, display_name
+import auth
+import context
+from engine import get_news, display_name
 
 st.set_page_config(page_title="News", page_icon="📰", layout="wide")
+user, cookies = auth.require_login()
+raw_portfolio, portfolio_id = context.ensure_active_portfolio(user, cookies)
+
 st.title("📰 News")
 st.caption("Latest headlines for each stock in your portfolio.")
 
-raw_portfolio = get_portfolio()
+if not raw_portfolio:
+    st.info("This portfolio has no holdings yet. Add some on the **Portfolio** page.")
+    st.stop()
 
 for ticker in raw_portfolio:
     st.subheader(display_name(ticker))

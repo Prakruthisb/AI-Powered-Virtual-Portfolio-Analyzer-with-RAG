@@ -1,7 +1,9 @@
 import streamlit as st
 import plotly.express as px
+import auth
+import context
 from engine import (
-    get_portfolio, evaluate_portfolio, get_portfolio_history,
+    evaluate_portfolio, get_portfolio_history,
     get_daily_returns, get_portfolio_daily_returns,
     compute_volatility, compute_correlation_matrix,
     compute_max_drawdown, compute_concentration, compute_risk_score,
@@ -9,9 +11,15 @@ from engine import (
 )
 
 st.set_page_config(page_title="Metrics", page_icon="🧮", layout="wide")
+user, cookies = auth.require_login()
+raw_portfolio, portfolio_id = context.ensure_active_portfolio(user, cookies)
+
 st.title("🧮 Financial Metrics")
 
-raw_portfolio = get_portfolio()
+if not raw_portfolio or len(raw_portfolio) < 2:
+    st.info("Add at least 2 holdings on the **Portfolio** page to see these metrics (correlation needs at least 2 stocks).")
+    st.stop()
+
 tickers = list(raw_portfolio.keys())
 
 period = st.select_slider(

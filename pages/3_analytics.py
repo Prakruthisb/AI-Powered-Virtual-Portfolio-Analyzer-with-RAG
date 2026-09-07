@@ -1,14 +1,22 @@
 import streamlit as st
 import plotly.express as px
+import auth
+import context
 from engine import (
-    get_portfolio, evaluate_portfolio, get_portfolio_history,
+    evaluate_portfolio, get_portfolio_history,
     get_normalized_prices, display_name,
 )
 
 st.set_page_config(page_title="Analytics", page_icon="📈", layout="wide")
+user, cookies = auth.require_login()
+raw_portfolio, portfolio_id = context.ensure_active_portfolio(user, cookies)
+
 st.title("📈 Analytics")
 
-raw_portfolio = get_portfolio()
+if not raw_portfolio:
+    st.info("This portfolio has no holdings yet. Add some on the **Portfolio** page.")
+    st.stop()
+
 tickers = list(raw_portfolio.keys())
 
 with st.spinner("Fetching live prices..."):
@@ -24,7 +32,7 @@ with st.spinner("Building growth chart..."):
     history = get_portfolio_history(raw_portfolio, period)
 fig1 = px.line(history, x=history.columns[0], y="Portfolio Value")
 fig1.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=350)
-st.plotly_chart(fig1, width='stretch')
+st.plotly_chart(fig1, use_container_width=True)
 
 st.divider()
 
@@ -38,7 +46,7 @@ pie_df = [
 ]
 fig2 = px.pie(pie_df, names="Stock", values="Value", hole=0.35)
 fig2.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=400)
-st.plotly_chart(fig2, width='stretch')
+st.plotly_chart(fig2, use_container_width=True)
 
 st.divider()
 
@@ -54,4 +62,4 @@ melted["Stock"] = melted["Stock"].apply(display_name)
 
 fig3 = px.line(melted, x=date_col, y="Normalized Price", color="Stock")
 fig3.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=400)
-st.plotly_chart(fig3, width='stretch')
+st.plotly_chart(fig3, use_container_width=True)
