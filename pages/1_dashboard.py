@@ -35,9 +35,12 @@ period = st.select_slider(
 with st.spinner("Building growth chart..."):
     history = get_portfolio_history(raw_portfolio, period)
 
-fig = px.line(history, x=history.columns[0], y="Portfolio Value")
-fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=350)
-st.plotly_chart(fig, use_container_width=True)
+if history.empty:
+    st.info("Not enough overlapping price history for this period yet — try a longer period.")
+else:
+    fig = px.line(history, x=history.columns[0], y="Portfolio Value")
+    fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=350)
+    st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 

@@ -34,6 +34,10 @@ with st.spinner("Crunching returns..."):
     portfolio_returns = get_portfolio_daily_returns(raw_portfolio, period)
     history = get_portfolio_history(raw_portfolio, period)
 
+if history.empty or portfolio_returns.empty:
+    st.info("Not enough overlapping price history for this period yet — try a longer period, or check back once your holdings have more trading days of data.")
+    st.stop()
+
 # ---- Metric 1: Daily Returns ----
 st.subheader("1. Daily Returns")
 st.caption("Portfolio's day-over-day % change.")
@@ -75,10 +79,17 @@ st.caption("The biggest fall from a previous high point.")
 value_series = history.set_index(history.columns[0])["Portfolio Value"]
 dd = compute_max_drawdown(value_series)
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Max Drawdown", f"{dd['max_drawdown_pct']}%")
-c2.metric("Peak Value", f"₹{dd['peak_value']:,.0f}", help=str(dd["peak_date"].date()))
-c3.metric("Lowest After Peak", f"₹{dd['trough_value']:,.0f}", help=str(dd["trough_date"].date()))
+if dd.get("insufficient_data"):
+    st.warning("Not enough price history yet for this period to compute drawdown — try a longer period, or check back once your holdings have more trading days of data.")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Max Drawdown", "—")
+    c2.metric("Peak Value", "—")
+    c3.metric("Lowest After Peak", "—")
+else:
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Max Drawdown", f"{dd['max_drawdown_pct']}%")
+    c2.metric("Peak Value", f"₹{dd['peak_value']:,.0f}", help=str(dd["peak_date"].date()))
+    c3.metric("Lowest After Peak", f"₹{dd['trough_value']:,.0f}", help=str(dd["trough_date"].date()))
 
 st.divider()
 

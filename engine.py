@@ -88,7 +88,13 @@ def get_portfolio_history(raw_portfolio: dict, period: str = "6mo") -> pd.DataFr
 
     value = pd.Series(0.0, index=data.index)
     for ticker in tickers:
-        value += data[ticker].ffill() * portfolio[ticker]["shares"]
+        value += data[ticker].fillna(method="ffill") * portfolio[ticker]["shares"]
+
+    # Drop any date where the running total is still NaN — happens for dates
+    # before a holding's earliest available price (e.g. a recently-added
+    # stock, or a symbol yfinance has thin data for). Otherwise those NaNs
+    # propagate into every downstream metric (drawdown, volatility, etc).
+    value = value.dropna()
 
     return value.rename("Portfolio Value").reset_index()
 
@@ -109,6 +115,35 @@ def get_normalized_prices(tickers: list, period: str = "6mo") -> pd.DataFrame:
 # ---------------------------------------------------------------
 # News — latest headlines per holding
 # ---------------------------------------------------------------
+
+# ---------------------------------------------------------------
+# Live stock search — fallback for anything not in stock_universe.py.
+# Hits Yahoo Finance's search endpoint, so it covers any ticker/company
+# yfinance knows about (not just the curated NSE list).
+# ---------------------------------------------------------------
+@st.cache_data(ttl=3600, show_spinner=False)
+def search_stocks(query: str, max_results: int = 8) -> list:
+    query = (query or "").strip()
+    if len(query) < 2:
+        return []
+    try:
+        quotes = yf.Search(query, max_results=max_results).quotes
+    except Exception:
+        return []
+
+    results = []
+    for q in quotes:
+        symbol = q.get("symbol")
+        if not symbol:
+            continue
+        results.append({
+            "symbol": symbol,
+            "name": q.get("shortname") or q.get("longname") or symbol,
+            "exchange": q.get("exchange", ""),
+        })
+    return results
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def get_news(ticker: str, limit: int = 5) -> list:
     try:
@@ -161,6 +196,20 @@ def compute_correlation_matrix(returns_df: pd.DataFrame) -> pd.DataFrame:
 # Metric 4: Maximum Drawdown — biggest fall from a prior peak
 # ---------------------------------------------------------------
 def compute_max_drawdown(value_series: pd.Series) -> dict:
+    value_series = value_series.dropna()
+
+    if len(value_series) < 2:
+        # Not enough price history to compute a meaningful drawdown
+        # (e.g. a brand-new holding, or too short a period selected).
+        return {
+            "max_drawdown_pct": 0.0,
+            "peak_value": round(value_series.iloc[-1], 2) if len(value_series) else 0.0,
+            "peak_date": value_series.index[-1] if len(value_series) else None,
+            "trough_value": round(value_series.iloc[-1], 2) if len(value_series) else 0.0,
+            "trough_date": value_series.index[-1] if len(value_series) else None,
+            "insufficient_data": True,
+        }
+
     running_peak = value_series.cummax()
     drawdown = (value_series - running_peak) / running_peak
 
@@ -174,6 +223,7 @@ def compute_max_drawdown(value_series: pd.Series) -> dict:
         "peak_date": peak_idx,
         "trough_value": round(value_series.loc[trough_idx], 2),
         "trough_date": trough_idx,
+        "insufficient_data": False,
     }
 
 
