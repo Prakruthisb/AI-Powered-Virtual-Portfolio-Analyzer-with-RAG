@@ -53,3 +53,20 @@ class Holding(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     portfolio = relationship("Portfolio", back_populates="holdings")
+
+
+class NewsItem(Base):
+    """Shared across users (news is per stock, not per portfolio)."""
+    __tablename__ = "news_items"
+    __table_args__ = (UniqueConstraint("symbol", "url", name="uq_news_symbol_url"),)
+
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String(20), nullable=False, index=True)   # e.g. "TCS.NS"
+    title = Column(String(500), nullable=False)
+    source = Column(String(120))
+    url = Column(String(1000), nullable=False)
+    published_at = Column(DateTime)
+    sentiment = Column(String(10), nullable=False)            # Positive / Neutral / Negative
+    score = Column(Float, nullable=False)                     # -1 .. 1
+    engine = Column(String(20))                               # rule / finbert
+    created_at = Column(DateTime, default=datetime.utcnow)

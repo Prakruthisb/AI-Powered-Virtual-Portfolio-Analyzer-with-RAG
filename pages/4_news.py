@@ -1,43 +1,84 @@
 import streamlit as st
-from datetime import datetime
+import pandas as pd
+import plotly.express as px
 import auth
 import context
-from engine import get_news, display_name
+import news_service
+import sentiment
+import repository
+from engine import display_name
 
 st.set_page_config(page_title="News", page_icon="📰", layout="wide")
 user, cookies = auth.require_login()
 raw_portfolio, portfolio_id = context.ensure_active_portfolio(user, cookies)
 
-st.title("📰 News")
-st.caption("Latest headlines for each stock in your portfolio.")
+st.title("📰 News & Sentiment")
 
 if not raw_portfolio:
     st.info("This portfolio has no holdings yet. Add some on the **Portfolio** page.")
     st.stop()
 
-for ticker in raw_portfolio:
-    st.subheader(display_name(ticker))
-    with st.spinner(f"Fetching news for {display_name(ticker)}..."):
-        items = get_news(ticker)
+symbols = list(raw_portfolio.keys())
+EMOJI = {"Positive": "🟢", "Neutral": "🟡", "Negative": "🔴"}
 
-    if not items:
-        st.write("No recent news found.")
-        st.divider()
-        continue
+# ---- Refresh: automatically once per portfolio per session, or on button ----
+auto_key = f"news_refreshed_{portfolio_id}_{len(symbols)}"
+col_a, col_b = st.columns([1, 5])
+force = col_a.button("🔄 Refresh news")
+if force or auto_key not in st.session_state:
+    with st.spinner("Fetching headlines and scoring sentiment..."):
+        result = news_service.refresh_news(symbols)
+    st.session_state[auto_key] = True
+    if result["failed"]:
+        st.warning("Couldn't fetch news for: " + ", ".join(display_name(s) for s in result["failed"]))
+    if force:
+        st.toast(f"{result['new']} new headline(s) added.")
+col_b.caption(f"Sentiment engine: **{sentiment.get_engine()}** (change via SENTIMENT_ENGINE in .env)")
 
-    for item in items:
-        content = item.get("content", item)  # yfinance news schema varies by version
-        title = content.get("title") or item.get("title", "Untitled")
-        link = (content.get("canonicalUrl", {}) or {}).get("url") or item.get("link", "#")
-        publisher = (content.get("provider", {}) or {}).get("displayName") or item.get("publisher", "")
-        pub_date = content.get("pubDate") or item.get("providerPublishTime")
+items = repository.list_news(symbols, per_symbol=10)
+if not items:
+    st.info("No news found for these holdings yet.")
+    st.stop()
 
-        date_str = ""
-        if isinstance(pub_date, (int, float)):
-            date_str = datetime.fromtimestamp(pub_date).strftime("%d %b %Y")
-        elif isinstance(pub_date, str):
-            date_str = pub_date[:10]
+# ---- Portfolio-wide sentiment ----
+overall = news_service.summarize(items)
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Headlines", overall["total"])
+c2.metric("🟢 Positive", overall["counts"]["Positive"])
+c3.metric("🟡 Neutral", overall["counts"]["Neutral"])
+c4.metric("🔴 Negative", overall["counts"]["Negative"])
 
-        st.markdown(f"- [{title}]({link})  \n  <sub>{publisher} · {date_str}</sub>", unsafe_allow_html=True)
+# ---- Sentiment by stock ----
+chart_rows = []
+for s in symbols:
+    summary = news_service.summarize([i for i in items if i["symbol"] == s])
+    for label, n in summary["counts"].items():
+        chart_rows.append({"Stock": display_name(s), "Sentiment": label, "Headlines": n})
+fig = px.bar(
+    pd.DataFrame(chart_rows), x="Stock", y="Headlines", color="Sentiment", barmode="stack",
+    color_discrete_map={"Positive": "#2e9e5b", "Neutral": "#d9a521", "Negative": "#d1453b"},
+)
+fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=300)
+st.plotly_chart(fig, use_container_width=True)
 
+st.divider()
+
+# ---- Headlines per stock ----
+only = st.multiselect("Filter sentiment", ["Positive", "Neutral", "Negative"],
+                      default=["Positive", "Neutral", "Negative"])
+
+for s in symbols:
+    stock_items = [i for i in items if i["symbol"] == s]
+    summary = news_service.summarize(stock_items)
+    st.subheader(f"{display_name(s)}  ·  avg sentiment {summary['avg_score']:+.2f}")
+    shown = [i for i in stock_items if i["sentiment"] in only]
+    if not shown:
+        st.caption("No headlines match.")
+    for i in shown:
+        date = i["published_at"].strftime("%d %b %Y") if i["published_at"] else ""
+        st.markdown(
+            f"{EMOJI[i['sentiment']]} [{i['title']}]({i['url']})  \n"
+            f"<sub>{i['source']} · {date} · {i['sentiment']} ({i['score']:+.2f})</sub>",
+            unsafe_allow_html=True,
+        )
     st.divider()

@@ -70,3 +70,36 @@ def remove_holding(portfolio_id: int, symbol: str):
         ).first()
         if holding:
             session.delete(holding)
+
+
+# ---------------------------------------------------------------
+# News (shared per symbol)
+# ---------------------------------------------------------------
+def get_existing_news_urls(symbol: str) -> set:
+    from models import NewsItem
+    with get_session() as session:
+        rows = session.query(NewsItem.url).filter_by(symbol=symbol).all()
+        return {r[0] for r in rows}
+
+
+def save_news_items(items: list):
+    from models import NewsItem
+    with get_session() as session:
+        for item in items:
+            session.add(NewsItem(**item))
+
+
+def list_news(symbols: list, per_symbol: int = 10) -> list:
+    from models import NewsItem
+    out = []
+    with get_session() as session:
+        for sym in symbols:
+            rows = (session.query(NewsItem).filter_by(symbol=sym)
+                    .order_by(NewsItem.published_at.desc()).limit(per_symbol).all())
+            for n in rows:
+                out.append({
+                    "symbol": n.symbol, "title": n.title, "source": n.source,
+                    "url": n.url, "published_at": n.published_at,
+                    "sentiment": n.sentiment, "score": n.score, "engine": n.engine,
+                })
+    return out
