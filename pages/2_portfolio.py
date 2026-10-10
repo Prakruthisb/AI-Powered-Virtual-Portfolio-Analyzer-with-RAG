@@ -7,7 +7,7 @@ import context
 import repository
 import doc_pipeline
 from engine import evaluate_portfolio, search_stocks, display_name
-from stock_universe import NSE_STOCKS
+import stock_list
 
 st.set_page_config(page_title="Portfolio", page_icon="💼", layout="wide")
 user, cookies = auth.require_login()
@@ -58,17 +58,18 @@ st.subheader("Add a holding")
 
 # Stock picker lives OUTSIDE the form below: Streamlit forms only rerun on
 # submit, but the search box needs to react on every keystroke.
-NSE_LABELS = {f"{name} ({symbol})": symbol for symbol, name in NSE_STOCKS}
+ALL_STOCKS = stock_list.load_stocks()          # full NSE list (or the built-in popular list as a fallback)
+NSE_LABELS = {f"{name} ({symbol})": symbol for symbol, name in ALL_STOCKS}
 
 find_mode = st.radio(
-    "Find a stock", ["Pick from common NSE stocks", "Search by name or ticker"],
+    "Find a stock", ["Pick from NSE-listed stocks", "Search by name or ticker"],
     horizontal=True, label_visibility="collapsed",
 )
 
 selected_symbol = None
 selected_label = None
 
-if find_mode == "Pick from common NSE stocks":
+if find_mode == "Pick from NSE-listed stocks":
     selected_label = st.selectbox(
         "Stock",
         options=list(NSE_LABELS.keys()),
@@ -77,6 +78,24 @@ if find_mode == "Pick from common NSE stocks":
     )
     if selected_label:
         selected_symbol = NSE_LABELS[selected_label]
+
+    info = stock_list.status()
+    cap, btn = st.columns([5, 1])
+    if info["source"] == "nse":
+        cap.caption(f"{info['count']:,} NSE-listed stocks · list updated {info['updated']:%d %b %Y}. "
+                    "Not listed here? Use **Search by name or ticker**.")
+    else:
+        cap.caption(f"Showing {info['count']} popular stocks — the full NSE list "
+                    f"{'is downloading…' if info['refreshing'] else 'has not been downloaded yet.'} "
+                    "Use **Search by name or ticker** for any other stock.")
+    if btn.button("Update list", help="Download NSE's latest list of listed stocks"):
+        with st.spinner("Downloading NSE's stock list..."):
+            ok, msg = stock_list.refresh()
+        (st.toast if ok else st.error)(msg)
+        if ok:
+            st.rerun()
+    elif info["error"] and info["source"] != "nse":
+        st.caption(f"⚠️ {info['error']}")
 else:
     query = st.text_input(
         "Search by company name or ticker",

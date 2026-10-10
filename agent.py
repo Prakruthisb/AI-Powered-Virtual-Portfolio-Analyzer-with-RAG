@@ -18,6 +18,7 @@ import re
 import agent_tools as tools
 import doc_fetcher
 import llm
+import stock_list
 from stock_universe import NSE_STOCKS
 
 MAX_QUESTION_CHARS = 500
@@ -75,8 +76,9 @@ def find_tickers(question: str, holdings: list) -> list:
     q = question.lower()
     names = dict(NSE_STOCKS)
     catalog = {t: _aliases(t, names.get(t, "")) for t in names}
+    full_names = dict(stock_list.load_stocks())      # every NSE company, for holdings outside the popular list
     for t in holdings:
-        catalog.setdefault(t, _aliases(t))
+        catalog.setdefault(t, _aliases(t, full_names.get(t, "")))
     found = []
     for t in list(holdings) + [t for t in catalog if t not in holdings]:
         if any(re.search(rf"(?<![a-z0-9]){re.escape(a)}(?![a-z0-9])", q) for a in catalog[t]):
