@@ -29,15 +29,24 @@ if force or auto_key not in st.session_state:
     with st.spinner("Fetching headlines and scoring sentiment..."):
         result = news_service.refresh_news(symbols)
     st.session_state[auto_key] = True
-    if result["failed"]:
-        st.warning("Couldn't fetch news for: " + ", ".join(display_name(s) for s in result["failed"]))
+    st.session_state["news_last_refresh"] = result      # kept so the details survive reruns
     if force:
         st.toast(f"{result['new']} new headline(s) added.")
 col_b.caption(f"Sentiment engine: **{sentiment.get_engine()}** (change via SENTIMENT_ENGINE in .env)")
 
+last = st.session_state.get("news_last_refresh")
+if last:
+    if last["failed"]:
+        st.warning("Couldn't fetch news for: " + ", ".join(display_name(s_) for s_ in last["failed"]))
+    with st.expander("Fetch details (where headlines came from)", expanded=bool(last["failed"])):
+        for sym, d in last["details"].items():
+            errors = f" · ⚠️ {'; '.join(d['errors'])}" if d["errors"] else ""
+            st.write(f"**{display_name(sym)}** — Yahoo {d['yahoo']}, Google News {d['google']}, "
+                     f"new {d['new']}{errors}")
+
 items = repository.list_news(symbols, per_symbol=10)
 if not items:
-    st.info("No news found for these holdings yet.")
+    st.info("No news found for these holdings yet. Check **Fetch details** above, then try Refresh.")
     st.stop()
 
 # ---- Portfolio-wide sentiment ----

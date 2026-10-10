@@ -37,16 +37,18 @@ def delete_portfolio(portfolio_id: int):
 
 
 def get_holdings_dict(portfolio_id: int) -> dict:
-    """Shape matches engine.py's RAW_PORTFOLIO: {ticker: {investment, buy_price}}."""
+    """Shape matches engine.py's RAW_PORTFOLIO:
+    {ticker: {investment, buy_price, buy_date (datetime.date or None)}}."""
     with get_session() as session:
         rows = session.query(Holding).filter_by(portfolio_id=portfolio_id).all()
         return {
-            h.symbol: {"investment": h.investment, "buy_price": h.buy_price}
+            h.symbol: {"investment": h.investment, "buy_price": h.buy_price, "buy_date": h.buy_date}
             for h in rows
         }
 
 
-def add_holding(portfolio_id: int, symbol: str, investment: float, buy_price: float):
+def add_holding(portfolio_id: int, symbol: str, investment: float, buy_price: float, buy_date=None):
+    """Insert or update. On update, an omitted buy_date keeps the existing one."""
     shares = investment / buy_price
     with get_session() as session:
         existing = session.query(Holding).filter_by(
@@ -56,11 +58,21 @@ def add_holding(portfolio_id: int, symbol: str, investment: float, buy_price: fl
             existing.investment = investment
             existing.buy_price = buy_price
             existing.shares = shares
+            if buy_date is not None:
+                existing.buy_date = buy_date
         else:
             session.add(Holding(
-                portfolio_id=portfolio_id, symbol=symbol,
+                portfolio_id=portfolio_id, symbol=symbol, buy_date=buy_date,
                 investment=investment, buy_price=buy_price, shares=shares,
             ))
+
+
+def set_buy_date(portfolio_id: int, symbol: str, buy_date):
+    """Set (or clear, with None) the purchase date of an existing holding."""
+    with get_session() as session:
+        holding = session.query(Holding).filter_by(portfolio_id=portfolio_id, symbol=symbol).first()
+        if holding:
+            holding.buy_date = buy_date
 
 
 def remove_holding(portfolio_id: int, symbol: str):
@@ -103,3 +115,46 @@ def list_news(symbols: list, per_symbol: int = 10) -> list:
                     "sentiment": n.sentiment, "score": n.score, "engine": n.engine,
                 })
     return out
+
+
+# ---------------------------------------------------------------
+# Document fetch status (shared per company)
+# ---------------------------------------------------------------
+def get_doc_statuses(symbols: list) -> dict:
+    from models import DocumentStatus
+    with get_session() as session:
+        rows = session.query(DocumentStatus).filter(DocumentStatus.symbol.in_(symbols)).all()
+        return {x.symbol: {"status": x.status, "message": x.message,
+                           "reports": x.reports, "updated_at": x.updated_at} for x in rows}
+
+
+def set_doc_status(symbol: str, status: str, message: str = "", reports: int = 0):
+    from datetime import datetime
+    from models import DocumentStatus
+    with get_session() as session:
+        row = session.query(DocumentStatus).filter_by(symbol=symbol).first()
+        if row is None:
+            row = DocumentStatus(symbol=symbol)
+            session.add(row)
+        row.status, row.message, row.reports = status, message[:500], reports
+        row.updated_at = datetime.utcnow()
+
+
+def claim_doc_fetch(symbol: str, stale_minutes: int = 20) -> bool:
+    """Atomically mark `symbol` as fetching. Returns False if it is already
+    ready/fetching (or unsupported), so two users adding the same stock
+    don't trigger two downloads. Failed or stale-fetching entries can be re-claimed."""
+    from datetime import datetime, timedelta
+    from models import DocumentStatus
+    with get_session() as session:
+        row = session.query(DocumentStatus).filter_by(symbol=symbol).first()
+        if row is not None:
+            stale = row.updated_at and row.updated_at < datetime.utcnow() - timedelta(minutes=stale_minutes)
+            if row.status in ("ready", "unsupported") or (row.status == "fetching" and not stale):
+                return False
+        else:
+            row = DocumentStatus(symbol=symbol)
+            session.add(row)
+        row.status, row.message, row.reports = "fetching", "Queued...", 0
+        row.updated_at = datetime.utcnow()
+        return True

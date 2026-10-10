@@ -1,8 +1,11 @@
+from datetime import date
+
 import streamlit as st
 import pandas as pd
 import auth
 import context
 import repository
+import doc_pipeline
 from engine import evaluate_portfolio, search_stocks, display_name
 from stock_universe import NSE_STOCKS
 
@@ -17,18 +20,23 @@ if raw_portfolio:
         report = evaluate_portfolio(raw_portfolio)
 
     # ---- Full holdings table ----
+    doc_status = repository.get_doc_statuses([display_name(t).upper() for t in report["holdings"]])
+    DOC_ICON = {"ready": "✅ Ready", "fetching": "⏳ Fetching", "failed": "⚠️ Failed", "unsupported": "➖ N/A"}
     rows = []
     for ticker, h in report["holdings"].items():
+        ds = doc_status.get(display_name(ticker).upper())
         rows.append({
             "Stock": display_name(ticker),
             "Ticker": ticker,
             "Investment (₹)": h["investment"],
             "Buy Price (₹)": h["buy_price"],
+            "Buy Date": str(raw_portfolio[ticker]["buy_date"]) if raw_portfolio[ticker].get("buy_date") else "—",
             "Shares": h["shares"],
             "Current Price (₹)": h["current_price"],
             "Current Value (₹)": h["current_value"],
             "Profit/Loss (₹)": h["profit"],
             "Return (%)": h["return_pct"],
+            "Documents": DOC_ICON.get(ds["status"], "—") if ds else "—",
         })
 
     df = pd.DataFrame(rows)
@@ -92,17 +100,35 @@ if selected_symbol:
     st.caption(f"Selected: **{selected_symbol}**")
 
 with st.form("add_holding", clear_on_submit=True):
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     investment = c1.number_input("Investment (₹)", min_value=0.0, step=1000.0)
     buy_price = c2.number_input("Buy Price (₹)", min_value=0.0, step=10.0)
+    buy_date = c3.date_input("Purchase date (optional)", value=None, max_value=date.today(),
+                             help="Lets the assistant measure returns over a period correctly. "
+                                  "Without it, a holding is assumed to have been held the whole time.")
     submitted = st.form_submit_button("Add")
 
     if submitted:
         if not selected_symbol or investment <= 0 or buy_price <= 0:
             st.error("Pick a stock above, and fill in investment and buy price.")
         else:
-            repository.add_holding(portfolio_id, selected_symbol, investment, buy_price)
-            st.success(f"Added {selected_symbol}.")
+            repository.add_holding(portfolio_id, selected_symbol, investment, buy_price, buy_date)
+            # Fetch + index this company's annual reports in the background (returns instantly).
+            doc_pipeline.ensure_documents(selected_symbol)
+            st.toast(f"Added {selected_symbol}. Fetching its documents in the background...")
+            st.rerun()
+
+# ---- Set / change the purchase date of an existing holding ----
+if raw_portfolio:
+    with st.expander("Set or change a purchase date"):
+        st.caption("The assistant uses purchase dates to measure returns over a period. "
+                   "Holdings without one are assumed to have been held the whole time.")
+        date_ticker = st.selectbox("Holding", options=list(raw_portfolio.keys()), key="date_ticker")
+        current = raw_portfolio[date_ticker].get("buy_date")
+        new_date = st.date_input("Purchase date", value=current, max_value=date.today(), key=f"date_for_{date_ticker}")
+        if st.button("Save date") and new_date:
+            repository.set_buy_date(portfolio_id, date_ticker, new_date)
+            st.toast(f"Saved purchase date for {date_ticker}.")
             st.rerun()
 
 # ---- Remove a holding ----

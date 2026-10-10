@@ -11,3 +11,8 @@ __pycache__/
 
 # VS Code (optional)
 .vscode/
+
+local_dev.db
+vectorstore/
+data/*/
+.nse_cache/

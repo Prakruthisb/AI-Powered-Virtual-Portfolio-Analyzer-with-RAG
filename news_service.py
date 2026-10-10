@@ -6,10 +6,16 @@ Stored shape (matches the Phase 6 spec):
 """
 
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from urllib.parse import quote_plus
+import xml.etree.ElementTree as ET
+
+import requests
 import yfinance as yf
 
 import repository
 import sentiment
+from stock_universe import NSE_STOCKS
 
 
 def _parse_date(value):
@@ -45,22 +51,75 @@ def _fetch_raw(symbol: str) -> list:
     return yf.Ticker(symbol).news or []
 
 
-def refresh_news(symbols: list) -> dict:
-    """Fetch -> skip already-stored URLs -> score only the new ones -> save.
-    Returns {"new": int, "failed": [symbols]}."""
-    new_total, failed = 0, []
-    for symbol in symbols:
+MIN_YAHOO_ITEMS = 5   # below this, Google News is added as a second source
+_NAMES = {sym: name for sym, name in NSE_STOCKS}
+
+
+def company_name(symbol: str) -> str:
+    """'TCS.NS' -> 'Tata Consultancy Services' (searching the company name beats the bare ticker)."""
+    return _NAMES.get(symbol.upper(), symbol.upper().replace(".NS", "").replace(".BO", ""))
+
+
+def _fetch_google_news(symbol: str, limit: int = 10) -> list:
+    """Google News RSS search for '<company> stock' (last 30 days) — the spec's
+    'TCS latest news' idea. Free, no API key. Returns normalized items."""
+    query = quote_plus(f"{company_name(symbol)} stock when:30d")
+    url = f"https://news.google.com/rss/search?q={query}&hl=en-IN&gl=IN&ceid=IN:en"
+    resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+    resp.raise_for_status()
+
+    items = []
+    for node in ET.fromstring(resp.content).iter("item"):
+        title, link = (node.findtext("title") or "").strip(), (node.findtext("link") or "").strip()
+        if not title or not link:
+            continue
+        source = (node.findtext("source") or "").strip()
+        if source and title.endswith(f" - {source}"):       # Google appends " - Publisher" to titles
+            title = title[: -len(source) - 3].rstrip()
         try:
-            raw = _fetch_raw(symbol)
-        except Exception:
-            failed.append(symbol)
+            published = parsedate_to_datetime(node.findtext("pubDate")).astimezone(timezone.utc).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            published = None
+        items.append({"symbol": symbol, "title": title[:500], "source": source[:120],
+                      "url": link[:1000], "published_at": published})
+        if len(items) >= limit:
+            break
+    return items
+
+
+def refresh_news(symbols: list) -> dict:
+    """Per symbol: Yahoo first; if it gives fewer than MIN_YAHOO_ITEMS, add Google News.
+    Skip URLs already stored, score only the new ones, save.
+    Returns {"new": int, "failed": [symbols], "details": {symbol: {...}}} — `details`
+    says exactly where headlines came from (or why there were none)."""
+    new_total, failed, details = 0, [], {}
+    for symbol in symbols:
+        info = {"yahoo": 0, "google": 0, "new": 0, "errors": []}
+        details[symbol] = info
+        found = []
+
+        try:
+            found += [n for n in (normalize_item(r, symbol) for r in _fetch_raw(symbol)) if n]
+            info["yahoo"] = len(found)
+        except Exception as e:
+            info["errors"].append(f"Yahoo: {type(e).__name__}")
+
+        if len(found) < MIN_YAHOO_ITEMS:
+            try:
+                google = _fetch_google_news(symbol)
+                info["google"] = len(google)
+                found += google
+            except Exception as e:
+                info["errors"].append(f"Google News: {type(e).__name__}")
+
+        if not found and info["errors"]:
+            failed.append(symbol)          # nothing came back AND something broke
             continue
 
-        existing = repository.get_existing_news_urls(symbol)
-        fresh, seen = [], set(existing)
-        for r in raw:
-            item = normalize_item(r, symbol)
-            if item and item["url"] not in seen:
+        seen = repository.get_existing_news_urls(symbol)
+        fresh = []
+        for item in found:
+            if item["url"] not in seen:
                 seen.add(item["url"])
                 fresh.append(item)
         if not fresh:
@@ -69,8 +128,9 @@ def refresh_news(symbols: list) -> dict:
         for item, result in zip(fresh, sentiment.analyze_many([i["title"] for i in fresh])):
             item.update(sentiment=result["label"], score=result["score"], engine=result["engine"])
         repository.save_news_items(fresh)
+        info["new"] = len(fresh)
         new_total += len(fresh)
-    return {"new": new_total, "failed": failed}
+    return {"new": new_total, "failed": failed, "details": details}
 
 
 def summarize(items: list) -> dict:

@@ -9,7 +9,7 @@ Relationship: one User -> many Portfolios -> many Holdings.
 
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Float, DateTime, ForeignKey, UniqueConstraint
+    Column, Integer, String, Float, Date, DateTime, ForeignKey, UniqueConstraint
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -50,6 +50,7 @@ class Holding(Base):
     shares = Column(Float, nullable=False)
     buy_price = Column(Float, nullable=False)
     investment = Column(Float, nullable=False)
+    buy_date = Column(Date, nullable=True)             # when the user actually bought it (optional)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     portfolio = relationship("Portfolio", back_populates="holdings")
@@ -70,3 +71,14 @@ class NewsItem(Base):
     score = Column(Float, nullable=False)                     # -1 .. 1
     engine = Column(String(20))                               # rule / finbert
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DocumentStatus(Base):
+    """Per-company document fetch state. Shared across users (documents are per company)."""
+    __tablename__ = "document_status"
+
+    symbol = Column(String(20), primary_key=True)             # folder/ticker name, e.g. "TCS"
+    status = Column(String(20), nullable=False)               # fetching / ready / failed / unsupported
+    message = Column(String(500))
+    reports = Column(Integer, default=0)                      # annual reports available
+    updated_at = Column(DateTime, default=datetime.utcnow)
